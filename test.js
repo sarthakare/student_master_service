@@ -1,9 +1,14 @@
-const pool = require("./db");
+const { connect, getDb, close } = require("./db");
 
 async function test() {
-    const res = await pool.query("SELECT NOW()");
-    console.log(res.rows[0]);
-    process.exit();
+  await connect();
+  const db = await getDb();
+  const result = await db.command({ ping: 1 });
+  console.log("MongoDB ping:", result);
+  await close();
 }
 
-test();
+test().catch((error) => {
+  console.error("Connection test failed:", error.message);
+  process.exit(1);
+});

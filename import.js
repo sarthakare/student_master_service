@@ -1,71 +1,64 @@
-const fs = require("fs");
-const csv = require("csv-parser");
-const pool = require("./db");
+const path = require("path");
+const XLSX = require("xlsx");
+const { connect, close } = require("./db");
+const studentRepository = require("./repositories/studentRepository");
+
+const XLSX_PATH = path.join(__dirname, "students.xlsx");
 
 function normalizeHeader(header) {
-  return header
+  return String(header)
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "_");
 }
 
-async function importStudents() {
-  const rows = [];
+function readStudentsFromXlsx(filePath) {
+  const workbook = XLSX.readFile(filePath);
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-  await new Promise((resolve, reject) => {
-    fs.createReadStream("students.csv")
-      .pipe(
-        csv({
-          skipLines: 1,
-          mapHeaders: ({ header }) => normalizeHeader(header),
-        }),
-      )
-      .on("data", (row) => rows.push(row))
-      .on("end", resolve)
-      .on("error", reject);
-  });
-
-  let affectedRows = 0;
-
-  for (const row of rows) {
-    const enrollmentNo = row.enrollment_no;
-    if (!enrollmentNo) {
-      continue;
-    }
-
-    const result = await pool.query(
-      `
-      INSERT INTO student_master
-      (enrollment_no, name, faculty, programme, semester, session)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (enrollment_no, semester, session)
-      DO UPDATE SET
-        name = EXCLUDED.name,
-        faculty = EXCLUDED.faculty,
-        programme = EXCLUDED.programme,
-        semester = EXCLUDED.semester,
-        session = EXCLUDED.session
-      `,
-      [
-        enrollmentNo,
-        row.name,
-        row.faculty,
-        row.programme,
-        row.semester,
-        row.session,
-      ],
-    );
-    affectedRows += result.rowCount;
+  if (rawRows.length < 2) {
+    return [];
   }
 
-  console.log(`Import complete. Rows processed: ${rows.length}, rows affected: ${affectedRows}`);
+  const headers = rawRows[0].map(normalizeHeader);
+  const rows = [];
+
+  for (let i = 1; i < rawRows.length; i++) {
+    const values = rawRows[i];
+    const row = {};
+
+    headers.forEach((header, index) => {
+      if (!header) {
+        return;
+      }
+      const value = values[index];
+      row[header] = value != null ? String(value).trim() : "";
+    });
+
+    rows.push(row);
+  }
+
+  return rows;
 }
 
-importStudents()
+async function importStudents() {
+  const rows = readStudentsFromXlsx(XLSX_PATH);
+  const result = await studentRepository.upsertMany(rows);
+
+  console.log(
+    `Import complete. Rows in file: ${rows.length}, upsert operations: ${result.processed}, ` +
+      `matched: ${result.matchedCount}, modified: ${result.modifiedCount}, upserted: ${result.upsertedCount}`,
+  );
+}
+
+connect()
+  .then(() => importStudents())
   .catch((error) => {
     console.error("Import failed:", error.message);
     process.exitCode = 1;
   })
   .finally(async () => {
-    await pool.end();
+    await close();
   });
