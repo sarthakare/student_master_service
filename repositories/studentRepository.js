@@ -1,15 +1,13 @@
-const { getStudentsCollection } = require("../db");
+const {
+  getStudentProfilesCollection,
+  getStudentSemestersCollection,
+} = require("../db");
 
-const CORE_FIELDS = [
-  "enrollment_no",
-  "name",
-  "faculty",
-  "programme",
-  "semester",
-  "session",
-];
+const PROFILE_FIELDS = ["enrollment_no", "name", "faculty", "programme", "session"];
+const SEMESTER_FIELDS = ["enrollment_no", "semester"];
+const CORE_FIELDS = [...PROFILE_FIELDS, "semester"];
 
-function formatStudent(doc) {
+function formatDocument(doc) {
   if (!doc) {
     return null;
   }
@@ -17,18 +15,25 @@ function formatStudent(doc) {
   return rest;
 }
 
-function buildDocument(input) {
-  const doc = {};
-  const now = new Date();
+function cleanString(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  return String(value).trim();
+}
 
-  for (const field of CORE_FIELDS) {
-    if (input[field] !== undefined && input[field] !== null && input[field] !== "") {
-      doc[field] = String(input[field]).trim();
+function buildProfileDocument(input) {
+  const doc = {};
+
+  for (const field of PROFILE_FIELDS) {
+    const value = cleanString(input[field]);
+    if (value) {
+      doc[field] = value;
     }
   }
 
   for (const [key, value] of Object.entries(input)) {
-    if (CORE_FIELDS.includes(key) || key === "_id") {
+    if (key === "_id" || CORE_FIELDS.includes(key)) {
       continue;
     }
     if (value !== undefined && value !== null && value !== "") {
@@ -36,56 +41,108 @@ function buildDocument(input) {
     }
   }
 
-  return { doc, now };
+  return doc;
+}
+
+function buildSemesterDocument(input) {
+  const doc = {};
+
+  for (const field of SEMESTER_FIELDS) {
+    const value = cleanString(input[field]);
+    if (value) {
+      doc[field] = value;
+    }
+  }
+
+  return doc;
+}
+
+function flattenProfileWithSemester(profile, semesterDoc) {
+  return {
+    ...formatDocument(profile),
+    semester: semesterDoc.semester,
+  };
+}
+
+function toEnrollmentResponse(profile, semesterDocs) {
+  const base = formatDocument(profile);
+  return {
+    ...base,
+    semesters: semesterDocs
+      .map((doc) => formatDocument(doc).semester)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+  };
 }
 
 async function upsertStudent(input) {
-  const { doc, now } = buildDocument(input);
+  const now = new Date();
+  const profileDoc = buildProfileDocument(input);
+  const semesterDoc = buildSemesterDocument(input);
 
-  if (!doc.enrollment_no || !doc.semester || !doc.session) {
+  if (!profileDoc.enrollment_no || !profileDoc.session || !semesterDoc.semester) {
     const error = new Error("enrollment_no, semester, and session are required");
     error.statusCode = 400;
     throw error;
   }
 
-  const collection = await getStudentsCollection();
-  const filter = {
-    enrollment_no: doc.enrollment_no,
-    semester: doc.semester,
-    session: doc.session,
-  };
+  const profilesCollection = await getStudentProfilesCollection();
+  const semestersCollection = await getStudentSemestersCollection();
 
-  const result = await collection.findOneAndUpdate(
-    filter,
+  const profile = await profilesCollection.findOneAndUpdate(
+    { enrollment_no: profileDoc.enrollment_no },
     {
-      $set: { ...doc, updated_at: now },
+      $set: { ...profileDoc, updated_at: now },
       $setOnInsert: { created_at: now },
     },
     { upsert: true, returnDocument: "after" },
   );
 
-  return formatStudent(result);
+  await semestersCollection.findOneAndUpdate(
+    { enrollment_no: semesterDoc.enrollment_no, semester: semesterDoc.semester },
+    {
+      $set: { ...semesterDoc, updated_at: now },
+      $setOnInsert: { created_at: now },
+    },
+    { upsert: true },
+  );
+
+  return flattenProfileWithSemester(profile, semesterDoc);
 }
 
 async function upsertMany(rows) {
-  const collection = await getStudentsCollection();
-  const operations = [];
+  const profilesCollection = await getStudentProfilesCollection();
+  const semestersCollection = await getStudentSemestersCollection();
+  const profileOperations = [];
+  const semesterOperations = [];
 
   for (const row of rows) {
-    const { doc, now } = buildDocument(row);
-    if (!doc.enrollment_no || !doc.semester || !doc.session) {
+    const now = new Date();
+    const profileDoc = buildProfileDocument(row);
+    const semesterDoc = buildSemesterDocument(row);
+
+    if (!profileDoc.enrollment_no || !profileDoc.session || !semesterDoc.semester) {
       continue;
     }
 
-    operations.push({
+    profileOperations.push({
+      updateOne: {
+        filter: { enrollment_no: profileDoc.enrollment_no },
+        update: {
+          $set: { ...profileDoc, updated_at: now },
+          $setOnInsert: { created_at: now },
+        },
+        upsert: true,
+      },
+    });
+
+    semesterOperations.push({
       updateOne: {
         filter: {
-          enrollment_no: doc.enrollment_no,
-          semester: doc.semester,
-          session: doc.session,
+          enrollment_no: semesterDoc.enrollment_no,
+          semester: semesterDoc.semester,
         },
         update: {
-          $set: { ...doc, updated_at: now },
+          $set: { ...semesterDoc, updated_at: now },
           $setOnInsert: { created_at: now },
         },
         upsert: true,
@@ -93,52 +150,99 @@ async function upsertMany(rows) {
     });
   }
 
-  if (operations.length === 0) {
+  if (profileOperations.length === 0) {
     return { processed: 0, matchedCount: 0, modifiedCount: 0, upsertedCount: 0 };
   }
 
-  const result = await collection.bulkWrite(operations);
+  const [profileResult, semesterResult] = await Promise.all([
+    profilesCollection.bulkWrite(profileOperations),
+    semestersCollection.bulkWrite(semesterOperations),
+  ]);
+
   return {
-    processed: operations.length,
-    matchedCount: result.matchedCount,
-    modifiedCount: result.modifiedCount,
-    upsertedCount: result.upsertedCount,
+    processed: profileOperations.length,
+    matchedCount: profileResult.matchedCount + semesterResult.matchedCount,
+    modifiedCount: profileResult.modifiedCount + semesterResult.modifiedCount,
+    upsertedCount: profileResult.upsertedCount + semesterResult.upsertedCount,
   };
 }
 
-async function findPaginated(page, limit) {
-  const collection = await getStudentsCollection();
+async function findPaginated(page, limit, filters = {}) {
+  const profilesCollection = await getStudentProfilesCollection();
+  const semestersCollection = await getStudentSemestersCollection();
   const skip = (page - 1) * limit;
+  const profileFilter = {};
 
-  const docs = await collection
-    .find({})
+  if (filters.faculty) {
+    profileFilter.faculty = filters.faculty;
+  }
+
+  if (filters.semester) {
+    const enrollmentNos = await semestersCollection.distinct("enrollment_no", {
+      semester: filters.semester,
+    });
+    if (enrollmentNos.length === 0) {
+      return [];
+    }
+    profileFilter.enrollment_no = { $in: enrollmentNos };
+  }
+
+  const profiles = await profilesCollection
+    .find(profileFilter)
     .sort({ enrollment_no: 1 })
     .skip(skip)
     .limit(limit)
     .toArray();
 
-  return docs.map(formatStudent);
+  return profiles.map(formatDocument);
 }
 
 async function findByFilter(semester, faculty) {
-  const collection = await getStudentsCollection();
-  const docs = await collection.find({ semester, faculty }).toArray();
-  return docs.map(formatStudent);
+  const profilesCollection = await getStudentProfilesCollection();
+  const semestersCollection = await getStudentSemestersCollection();
+
+  const profileFilter = {};
+  if (faculty) {
+    profileFilter.faculty = faculty;
+  }
+
+  if (semester) {
+    const enrollmentNos = await semestersCollection.distinct("enrollment_no", {
+      semester,
+    });
+    if (enrollmentNos.length === 0) {
+      return [];
+    }
+    profileFilter.enrollment_no = { $in: enrollmentNos };
+  }
+
+  const profiles = await profilesCollection.find(profileFilter).sort({ enrollment_no: 1 }).toArray();
+  return profiles.map(formatDocument);
 }
 
 async function findByEnrollment(enrollmentNo) {
-  const collection = await getStudentsCollection();
-  const docs = await collection
+  const profilesCollection = await getStudentProfilesCollection();
+  const semestersCollection = await getStudentSemestersCollection();
+  const profile = await profilesCollection.findOne({ enrollment_no: enrollmentNo });
+
+  if (!profile) {
+    return null;
+  }
+
+  const semesters = await semestersCollection
     .find({ enrollment_no: enrollmentNo })
     .sort({ semester: 1 })
     .toArray();
 
-  return docs.map(formatStudent);
+  return toEnrollmentResponse(profile, semesters);
 }
 
 module.exports = {
   CORE_FIELDS,
-  buildDocument,
+  PROFILE_FIELDS,
+  SEMESTER_FIELDS,
+  buildProfileDocument,
+  buildSemesterDocument,
   upsertStudent,
   upsertMany,
   findPaginated,

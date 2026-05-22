@@ -4,12 +4,20 @@ const { connect, close } = require("./db");
 const studentRepository = require("./repositories/studentRepository");
 
 const XLSX_PATH = path.join(__dirname, "students.xlsx");
+const HEADER_ALIASES = {
+  enrollment_number: "enrollment_no",
+  student_name: "name",
+  program: "programme",
+  proggram: "programme",
+};
 
 function normalizeHeader(header) {
-  return String(header)
+  const normalized = String(header)
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "_");
+
+  return HEADER_ALIASES[normalized] || normalized;
 }
 
 function readStudentsFromXlsx(filePath) {

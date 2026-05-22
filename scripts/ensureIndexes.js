@@ -1,20 +1,36 @@
-const { connect, getStudentsCollection, close } = require("../db");
+const {
+  connect,
+  getStudentProfilesCollection,
+  getStudentSemestersCollection,
+  close,
+} = require("../db");
 
 async function main() {
   await connect();
-  const collection = await getStudentsCollection();
+  const profilesCollection = await getStudentProfilesCollection();
+  const semestersCollection = await getStudentSemestersCollection();
 
-  await collection.createIndex(
-    { enrollment_no: 1, semester: 1, session: 1 },
-    { unique: true, name: "unique_enrollment_semester_session" },
+  await profilesCollection.createIndex(
+    { enrollment_no: 1 },
+    { unique: true, name: "unique_enrollment_no" },
   );
 
-  await collection.createIndex(
-    { faculty: 1, semester: 1 },
-    { name: "faculty_semester" },
+  await profilesCollection.createIndex(
+    { faculty: 1 },
+    { name: "faculty" },
   );
 
-  console.log("Indexes ensured on students collection.");
+  await semestersCollection.createIndex(
+    { enrollment_no: 1, semester: 1 },
+    { unique: true, name: "unique_enrollment_semester" },
+  );
+
+  await semestersCollection.createIndex(
+    { semester: 1 },
+    { name: "semester" },
+  );
+
+  console.log("Indexes ensured on student_profiles and student_semesters collections.");
   await close();
 }
 

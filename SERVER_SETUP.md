@@ -68,7 +68,7 @@ npm run db:ensure-indexes
 Expected output:
 
 ```text
-Indexes ensured on students collection.
+Indexes ensured on student_profiles and student_semesters collections.
 ```
 
 Run again after a fresh database; it is safe and idempotent.
@@ -83,7 +83,11 @@ Place `students.xlsx` in the project root, then:
 npm run import:students
 ```
 
-This upserts all rows into the `students` collection. Re-running updates existing records (no duplicates for the same enrollment + semester + session).
+This upserts rows into two collections:
+- `student_profiles` (`enrollment_no`, `name`, `faculty`, `programme`, `session`)
+- `student_semesters` (`enrollment_no`, `semester`)
+
+Re-running updates existing records (no duplicates for the same enrollment + semester pair).
 
 Verify connection (optional):
 
@@ -153,9 +157,11 @@ Base URL: `http://<server-ip>:5002` (or behind nginx on port 80/443)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/students?page=1&limit=50` | Paginated list |
-| `GET` | `/students/filter?semester=2&faculty=...` | Filter by semester and faculty |
-| `GET` | `/students/:enrollment` | All rows for one enrollment number |
+| `GET` | `/students?page=1&limit=50` | Paginated list from `student_profiles` |
+| `GET` | `/students?page=1&limit=50&semester=2` | Profile list filtered by semester via `student_semesters` |
+| `GET` | `/students?page=1&limit=50&faculty=...` | Profile list filtered by faculty |
+| `GET` | `/students?page=1&limit=50&semester=2&faculty=...` | Profile list filtered by semester and faculty |
+| `GET` | `/students/enrollment/:enrollment` | One profile with `semesters` array |
 | `POST` | `/students` | Create or update one student row (JSON body) |
 
 **POST example**
@@ -172,6 +178,42 @@ Base URL: `http://<server-ip>:5002` (or behind nginx on port 80/443)
 ```
 
 Extra fields in the body are stored on the document (flexible schema).
+
+`GET /students?page=1&limit=2` response example:
+
+```json
+[
+  {
+    "enrollment_no": "ADTU/0/2025-29/BTCS/001",
+    "name": "LALFAKAWMA RALTE",
+    "faculty": "Faculty of Computer Technology",
+    "programme": "B.Tech in Computer Science and Engineering",
+    "session": "2025-29"
+  },
+  {
+    "enrollment_no": "ADTU/0/2025-29/BTCS/002",
+    "name": "ABC XYZ",
+    "faculty": "Faculty of Computer Technology",
+    "programme": "B.Tech in Computer Science and Engineering",
+    "session": "2025-29"
+  }
+]
+```
+
+`GET /students?page=1&limit=50&semester=2` returns only profiles whose `enrollment_no` exists in `student_semesters` for semester `2`.
+
+`GET /students/enrollment/:enrollment` response example:
+
+```json
+{
+  "enrollment_no": "ADTU/0/2025-29/BTCS/001",
+  "name": "LALFAKAWMA RALTE",
+  "faculty": "Faculty of Computer Technology",
+  "programme": "B.Tech in Computer Science and Engineering",
+  "session": "2025-29",
+  "semesters": ["1", "2"]
+}
+```
 
 ---
 

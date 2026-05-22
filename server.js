@@ -29,7 +29,9 @@ app.get("/students", async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.max(1, Number(req.query.limit) || 50);
-    const students = await studentRepository.findPaginated(page, limit);
+    const semester = req.query.semester ? String(req.query.semester) : undefined;
+    const faculty = req.query.faculty ? String(req.query.faculty) : undefined;
+    const students = await studentRepository.findPaginated(page, limit, { semester, faculty });
     res.json(students);
   } catch (error) {
     console.error(error);
@@ -37,21 +39,13 @@ app.get("/students", async (req, res) => {
   }
 });
 
-app.get("/students/filter", async (req, res) => {
+app.get("/students/enrollment/:enrollment", async (req, res) => {
   try {
-    const { semester, faculty } = req.query;
-    const students = await studentRepository.findByFilter(semester, faculty);
-    res.json(students);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to filter students" });
-  }
-});
-
-app.get("/students/:enrollment", async (req, res) => {
-  try {
-    const students = await studentRepository.findByEnrollment(req.params.enrollment);
-    res.json(students);
+    const student = await studentRepository.findByEnrollment(req.params.enrollment);
+    if (!student) {
+      return res.status(404).json({ error: "Student not found" });
+    }
+    res.json(student);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch student" });

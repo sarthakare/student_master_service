@@ -2,6 +2,8 @@ const { MongoClient } = require("mongodb");
 require("dotenv").config();
 
 const COLLECTION_NAME = "students";
+const STUDENT_PROFILES_COLLECTION = "student_profiles";
+const STUDENT_SEMESTERS_COLLECTION = "student_semesters";
 
 let client;
 let db;
@@ -34,6 +36,16 @@ async function getStudentsCollection() {
   return database.collection(COLLECTION_NAME);
 }
 
+async function getStudentProfilesCollection() {
+  const database = await getDb();
+  return database.collection(STUDENT_PROFILES_COLLECTION);
+}
+
+async function getStudentSemestersCollection() {
+  const database = await getDb();
+  return database.collection(STUDENT_SEMESTERS_COLLECTION);
+}
+
 async function close() {
   if (client) {
     await client.close();
@@ -46,6 +58,10 @@ module.exports = {
   connect,
   getDb,
   getStudentsCollection,
+  getStudentProfilesCollection,
+  getStudentSemestersCollection,
   close,
   COLLECTION_NAME,
+  STUDENT_PROFILES_COLLECTION,
+  STUDENT_SEMESTERS_COLLECTION,
 };
